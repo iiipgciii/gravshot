@@ -1448,7 +1448,7 @@ function render() {
   ctx.fillText('GRAVSHOT', 10, VPORT_H - 22);
   ctx.globalAlpha = 0.18;
   ctx.font = '10px Courier New';
-  ctx.fillText('v1.4', 10, VPORT_H - 8);
+  ctx.fillText('v1.5', 10, VPORT_H - 8);
   ctx.restore();
 
   requestAnimationFrame(render);
