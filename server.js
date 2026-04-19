@@ -142,12 +142,12 @@ function simulateTraj(startX, startY, vx, vy, planets, ships, firerId, opts = {}
   let tunnelPlanetId = null; // planet currently being tunneled through
   let tunnelDone = false;    // already passed through one planet
 
-  // Grace set: skip ring collision for any planet whose inner gap contains the start position.
-  // This fixes shots immediately triggering rings they're already inside (home planet or nearby).
+  // Grace set: skip ring collision for any planet whose ring zone contains the start position
+  // (covers both the inner gap and the ring band itself), until the shot exits past outerR.
   const ringGracePlanets = new Set();
   for (const p of planets) {
     if (!p.ring) continue;
-    if (Math.hypot(p.x - startX, p.y - startY) < p.ring.innerR) ringGracePlanets.add(p.id);
+    if (Math.hypot(p.x - startX, p.y - startY) < p.ring.outerR) ringGracePlanets.add(p.id);
   }
 
   for (let step = 0; step < maxSteps; step++) {
