@@ -392,16 +392,68 @@ const PLANET_PALETTES = {
 
 function buildPlanetCanvas(p) {
   const pad = 18;
-  const size = Math.ceil((p.r + pad) * 2);
-  const oc = document.createElement('canvas');
-  oc.width = size; oc.height = size;
-  const oc2 = oc.getContext('2d');
-  const cx = size / 2, cy = size / 2;
   const r = p.r;
   const type = p.type || 'rocky';
   const pal = PLANET_PALETTES[type] || PLANET_PALETTES.rocky;
   const rng = seededRng(p.id * 97 + 31);
 
+  // Canvas must be large enough to contain the ring system if present
+  const halfSize = p.ring ? Math.ceil(p.ring.outerR + 14) : Math.ceil(r + pad);
+  const size = halfSize * 2;
+  const oc = document.createElement('canvas');
+  oc.width = size; oc.height = size;
+  const oc2 = oc.getContext('2d');
+  const cx = halfSize, cy = halfSize;
+
+  // ── Ring drawing helper ───────────────────────────────────────────────────
+  // Per-type ring color palettes (3 alternating band shades)
+  const RING_COLS = {
+    rocky:  [[165,148,118],[128,110,86],[98,80,58]],
+    lava:   [[210,110,52],[168,74,32],[118,44,14]],
+    ice:    [[188,212,238],[152,178,208],[108,142,182]],
+    gas:    [[218,188,112],[172,142,74],[132,102,44]],
+    ocean:  [[88,148,212],[52,108,172],[32,72,132]],
+    desert: [[202,162,92],[162,122,62],[122,88,32]],
+    alien:  [[68,212,128],[42,162,88],[22,112,52]],
+  };
+  const ringCols = RING_COLS[type] || RING_COLS.rocky;
+
+  const drawRingHalf = (front) => {
+    const ring = p.ring;
+    const tilt = ring.tilt;          // Y-radius scale (0=flat disk, 1=circle)
+    const numBands = 8;
+    const span = ring.outerR - ring.innerR;
+    const bandW = (span / numBands) * 0.78; // slight gap between bands
+
+    oc2.save();
+    // Clip to the half that belongs in front of / behind the planet
+    oc2.beginPath();
+    if (front) oc2.rect(0, 0, size, cy);          // upper half = in front
+    else       oc2.rect(0, cy, size, halfSize + 2); // lower half = behind
+    oc2.clip();
+
+    // Draw outer bands first so inner bands paint on top
+    for (let bi = numBands - 1; bi >= 0; bi--) {
+      const t = (bi + 0.5) / numBands;
+      const midR = ring.innerR + t * span;
+      const col = ringCols[bi % ringCols.length];
+      // Back half is darker (in shadow of planet)
+      const brightness = front ? 1.0 : 0.42;
+      const alpha = (0.62 + (1 - t) * 0.28) * brightness;
+      oc2.globalAlpha = Math.max(0, alpha);
+      oc2.strokeStyle = `rgb(${col[0]},${col[1]},${col[2]})`;
+      oc2.lineWidth = bandW;
+      oc2.beginPath();
+      oc2.ellipse(cx, cy, midR, midR * tilt, 0, 0, Math.PI * 2);
+      oc2.stroke();
+    }
+    oc2.restore();
+  };
+
+  // ── 1. Back half of rings (planet will paint over this) ──────────────────
+  if (p.ring) drawRingHalf(false);
+
+  // ── 2. Planet sphere ──────────────────────────────────────────────────────
   oc2.beginPath();
   oc2.arc(cx, cy, r, 0, Math.PI * 2);
 
@@ -554,24 +606,7 @@ function buildPlanetCanvas(p) {
     oc2.beginPath(); oc2.arc(cx, cy, r+8, 0, Math.PI*2); oc2.fill();
   }
 
-  // Rings (gas planets sometimes)
-  if (type === 'gas' && seededRng(p.id * 7 + 2)() > 0.55) {
-    const rng2 = seededRng(p.id * 13 + 99);
-    oc2.save();
-    oc2.globalAlpha = 0.45;
-    for (let ri = 0; ri < 3; ri++) {
-      const rr = r * (1.4 + ri * 0.18 + rng2() * 0.1);
-      const rh = 4 + rng2() * 5;
-      oc2.strokeStyle = `rgba(${180+Math.floor(rng2()*60)},${140+Math.floor(rng2()*50)},80,0.7)`;
-      oc2.lineWidth = rh;
-      oc2.beginPath();
-      oc2.ellipse(cx, cy, rr, rr * 0.28, 0.3, 0, Math.PI * 2);
-      oc2.stroke();
-    }
-    oc2.restore();
-  }
-
-  // Punch holes (destination-out)
+  // ── 3. Punch planet holes (destination-out) ───────────────────────────────
   const holes = p.holes || [];
   if (holes.length > 0) {
     for (const h of holes) {
@@ -613,51 +648,17 @@ function buildPlanetCanvas(p) {
     }
   }
 
-  // Saturn-style rings (drawn as tilted ellipses with blow-through holes)
-  if (p.ring) {
-    const ring = p.ring;
-    const tilt = ring.tilt || 0.3;
-    // Determine ring color from planet type
-    const ringPalette = {
-      rocky: '#887766', lava: '#cc6633', ice: '#aaccee',
-      gas: '#c0a060', ocean: '#4488bb', desert: '#cc9944', alien: '#44cc66',
-    };
-    const rc = ringPalette[p.type] || '#887766';
+  // ── 4. Front half of rings (drawn on top of planet) ──────────────────────
+  if (p.ring) drawRingHalf(true);
+
+  // ── 5. Punch ring blow-through holes ─────────────────────────────────────
+  if (p.ring && p.ring.holes.length > 0) {
     oc2.save();
-    // Draw back half (behind planet)
-    for (let pass = 0; pass < 2; pass++) {
-      // pass 0 = behind, pass 1 = front (only front half visible over planet)
-      const startA = pass === 0 ? Math.PI : 0;
-      const endA   = pass === 0 ? Math.PI * 2 : Math.PI;
-      const numBands = 3;
-      for (let bi = 0; bi < numBands; bi++) {
-        const frac = bi / numBands;
-        const iR = cx + (ring.innerR + (ring.outerR - ring.innerR) * frac);
-        const oR = cx + (ring.innerR + (ring.outerR - ring.innerR) * (frac + 1/numBands));
-        // Use clipping to draw only the half-ellipse pass
-        oc2.save();
-        oc2.beginPath();
-        if (pass === 0) oc2.rect(0, cy, size, size); // lower half (behind)
-        else oc2.rect(0, 0, size, cy); // upper half (front)
-        oc2.clip();
-        oc2.globalAlpha = 0.55 - bi * 0.08;
-        oc2.strokeStyle = rc;
-        oc2.lineWidth = (ring.outerR - ring.innerR) / numBands;
-        oc2.beginPath();
-        oc2.ellipse(cx, cy, (iR + oR) / 2 - cx, ((iR + oR) / 2 - cx) * tilt, 0, 0, Math.PI * 2);
-        oc2.stroke();
-        oc2.restore();
-      }
-    }
-    // Punch ring holes (where shots have passed through)
-    if (ring.holes.length > 0) {
-      oc2.globalCompositeOperation = 'destination-out';
-      for (const h of ring.holes) {
-        const hx2 = cx + (h.x - p.x), hy2 = cy + (h.y - p.y);
-        oc2.fillStyle = 'rgba(0,0,0,1)';
-        oc2.beginPath(); oc2.arc(hx2, hy2, h.r, 0, Math.PI * 2); oc2.fill();
-      }
-      oc2.globalCompositeOperation = 'source-over';
+    oc2.globalCompositeOperation = 'destination-out';
+    for (const h of p.ring.holes) {
+      const hx2 = cx + (h.x - p.x), hy2 = cy + (h.y - p.y);
+      oc2.fillStyle = 'rgba(0,0,0,1)';
+      oc2.beginPath(); oc2.arc(hx2, hy2, h.r * 1.1, 0, Math.PI * 2); oc2.fill();
     }
     oc2.restore();
   }

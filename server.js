@@ -109,9 +109,9 @@ function generatePlanets(rng, count) {
       // Give some larger planets Saturn-like rings
       if (r >= 75 && (type === 'gas' ? rng() < 0.75 : rng() < 0.20)) {
         planet.ring = {
-          innerR: r * 1.45,
-          outerR: r * 2.2,
-          tilt: 0.28 + rng() * 0.30,
+          innerR: r * 1.5,
+          outerR: r * 2.1,
+          tilt: 0.10 + rng() * 0.14,
           holes: [],
         };
       }
