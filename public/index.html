@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>GravShot</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+<!-- ═══ LOBBY ═══════════════════════════════════════════════════════════════ -->
+<div id="lobby">
+  <div id="lobby-inner">
+    <div id="title-block">
+      <h1>GRAVSHOT <span>SE</span></h1>
+      <p>Space artillery · Gravity matters</p>
+    </div>
+
+    <div id="name-section">
+      <input id="player-name" type="text" placeholder="Your callsign" maxlength="20" autocomplete="off" />
+    </div>
+
+    <div id="lobby-btns">
+      <button id="create-btn" class="primary">Create Room</button>
+      <div id="join-row">
+        <input id="room-code-input" type="text" placeholder="ROOM CODE" maxlength="6" autocomplete="off" />
+        <button id="join-btn">Join</button>
+      </div>
+    </div>
+
+    <div id="room-panel" class="hidden">
+      <div id="room-header">
+        <span>Room: <strong id="room-code-display">——</strong></span>
+        <button id="copy-code-btn" title="Copy room code">📋 Copy</button>
+      </div>
+
+      <div id="player-list-title">Players</div>
+      <ul id="player-list"></ul>
+
+      <div id="cpu-row">
+        <span>Add CPU:</span>
+        <button class="cpu-btn" data-diff="easy">Easy</button>
+        <button class="cpu-btn" data-diff="medium">Medium</button>
+        <button class="cpu-btn" data-diff="hard">Hard</button>
+      </div>
+
+      <div id="lobby-msg"></div>
+      <button id="start-btn" class="primary" disabled>Start Game</button>
+    </div>
+
+    <div id="lobby-error" class="hidden"></div>
+  </div>
+</div>
+
+<!-- ═══ GAME ════════════════════════════════════════════════════════════════ -->
+<div id="game" class="hidden">
+  <div id="game-layout">
+
+    <div id="canvas-wrap">
+      <canvas id="canvas" width="1000" height="700"></canvas>
+      <div id="aim-overlay">
+        <span id="aim-hint">← Click &amp; drag on canvas to aim</span>
+      </div>
+    </div>
+
+    <div id="sidebar">
+      <div id="turn-banner">Waiting…</div>
+      <div id="credits-display" class="hidden">
+        <span id="credits-label">💰 YOUR CREDITS</span>
+        <span id="credits-val">1,500</span>
+      </div>
+
+      <div id="health-panel">
+        <div class="panel-title">FLEET STATUS</div>
+        <div id="health-bars"></div>
+      </div>
+
+      <div id="weapon-panel">
+        <div class="panel-title">ARMORY</div>
+        <div id="weapon-grid"></div>
+      </div>
+
+      <div id="fire-panel">
+        <div id="angle-row">
+          <button class="ang-btn" id="angle-l" disabled>◀</button>
+          <span id="angle-disp">0°</span>
+          <button class="ang-btn" id="angle-r" disabled>▶</button>
+        </div>
+        <div id="power-row">
+          <label>Power</label>
+          <input id="power-slider" type="range" min="5" max="100" value="55" />
+          <span id="power-val">55%</span>
+        </div>
+        <div id="power-touch-row">
+          <button class="ang-btn" id="power-dn" disabled>−</button>
+          <span id="power-touch-val">55%</span>
+          <button class="ang-btn" id="power-up" disabled>+</button>
+        </div>
+        <button id="fire-btn" disabled>⚡ FIRE</button>
+        <button id="defend-btn" disabled>🛡️ SHIELD ($350)</button>
+        <button id="move-btn" disabled>📡 MOVE SHIP</button>
+      </div>
+
+      <div id="chat-panel">
+        <div class="panel-title">COMMS</div>
+        <div id="chat-msgs"></div>
+        <div id="chat-input-row">
+          <input id="chat-input" type="text" placeholder="Message…" maxlength="200" />
+          <button id="chat-send">→</button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ═══ OVERLAY (game over / waiting) ══════════════════════════════════════ -->
+<div id="overlay" class="hidden">
+  <div id="overlay-box">
+    <div id="overlay-title"></div>
+    <div id="overlay-sub"></div>
+    <button id="overlay-btn">Back to Lobby</button>
+  </div>
+</div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script src="game.js"></script>
+</body>
+</html>
