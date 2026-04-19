@@ -1440,11 +1440,14 @@ function render() {
   drawMinimap();
   // Watermark
   ctx.save();
-  ctx.globalAlpha = 0.12;
+  ctx.globalAlpha = 0.28;
   ctx.fillStyle = '#8899ff';
-  ctx.font = 'bold 22px Courier New';
+  ctx.font = 'bold 20px Courier New';
   ctx.textAlign = 'left';
-  ctx.fillText('GRAVSHOT', 10, VPORT_H - 10);
+  ctx.fillText('GRAVSHOT', 10, VPORT_H - 22);
+  ctx.globalAlpha = 0.18;
+  ctx.font = '10px Courier New';
+  ctx.fillText('v1.4', 10, VPORT_H - 8);
   ctx.restore();
 
   requestAnimationFrame(render);

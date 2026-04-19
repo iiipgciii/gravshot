@@ -47,8 +47,8 @@ body {
   text-shadow: 0 0 30px #4488ff, 0 0 60px #224488;
   text-align: center;
 }
-#title-block h1 span { color: var(--fire); text-shadow: 0 0 20px #ff2200; }
 #title-block p { text-align: center; color: var(--dim); letter-spacing: 3px; font-size: 0.75rem; margin-top: 4px; }
+#version-tag { color: #3a4a6a !important; font-size: 0.65rem !important; letter-spacing: 2px; margin-top: 2px; }
 
 input[type=text] {
   width: 100%;
