@@ -142,24 +142,26 @@ function simulateTraj(startX, startY, vx, vy, planets, ships, firerId, opts = {}
   let tunnelPlanetId = null; // planet currently being tunneled through
   let tunnelDone = false;    // already passed through one planet
 
-  // Grace set: skip ring collision for firer's home planet until shot exits ring zone
+  // Grace set: skip ring collision for any planet whose inner gap contains the start position.
+  // This fixes shots immediately triggering rings they're already inside (home planet or nearby).
   const ringGracePlanets = new Set();
-  if (firerPlanetId !== null) {
-    const fp = planets.find(p => p.id === firerPlanetId);
-    if (fp?.ring) ringGracePlanets.add(firerPlanetId);
+  for (const p of planets) {
+    if (!p.ring) continue;
+    if (Math.hypot(p.x - startX, p.y - startY) < p.ring.innerR) ringGracePlanets.add(p.id);
   }
 
   for (let step = 0; step < maxSteps; step++) {
-    // Gravity — skip tunneled planet to prevent suction-back
+    // Gravity — tunneler flies straight while boring through a planet
     let ax = 0, ay = 0;
-    for (const p of planets) {
-      if (tunnel && p.id === tunnelPlanetId) continue;
-      const dx = p.x - x, dy = p.y - y;
-      const d2 = dx * dx + dy * dy;
-      if (d2 < 4) continue;
-      const d = Math.sqrt(d2);
-      const f = G * p.mass / d2;
-      ax += f * dx / d; ay += f * dy / d;
+    if (!(tunnel && tunnelPlanetId !== null)) {
+      for (const p of planets) {
+        const dx = p.x - x, dy = p.y - y;
+        const d2 = dx * dx + dy * dy;
+        if (d2 < 4) continue;
+        const d = Math.sqrt(d2);
+        const f = G * p.mass / d2;
+        ax += f * dx / d; ay += f * dy / d;
+      }
     }
 
     if (guided && targetId !== null) {
