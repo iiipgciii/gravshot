@@ -136,11 +136,18 @@ function inHole(px, py, holes) {
 }
 
 function simulateTraj(startX, startY, vx, vy, planets, ships, firerId, opts = {}) {
-  const { guided = false, targetId = null, maxSteps = MAX_STEPS, tunnel = false } = opts;
+  const { guided = false, targetId = null, maxSteps = MAX_STEPS, tunnel = false, firerPlanetId = null } = opts;
   let x = startX, y = startY;
   const pts = [{ x, y }];
   let tunnelPlanetId = null; // planet currently being tunneled through
   let tunnelDone = false;    // already passed through one planet
+
+  // Grace set: skip ring collision for firer's home planet until shot exits ring zone
+  const ringGracePlanets = new Set();
+  if (firerPlanetId !== null) {
+    const fp = planets.find(p => p.id === firerPlanetId);
+    if (fp?.ring) ringGracePlanets.add(firerPlanetId);
+  }
 
   for (let step = 0; step < maxSteps; step++) {
     // Gravity — skip tunneled planet to prevent suction-back
@@ -182,6 +189,11 @@ function simulateTraj(startX, startY, vx, vy, planets, ships, firerId, opts = {}
     for (const p of planets) {
       if (!p.ring) continue;
       const d = Math.hypot(p.x - x, p.y - y);
+      // Grace: skip ring of home planet until shot clears it
+      if (ringGracePlanets.has(p.id)) {
+        if (d > p.ring.outerR) ringGracePlanets.delete(p.id);
+        continue;
+      }
       if (d >= p.ring.innerR && d <= p.ring.outerR && !inHole(x, y, p.ring.holes)) {
         return { pts, hitType: 'ring', hitId: p.id, hx: x, hy: y, vx, vy };
       }
@@ -227,7 +239,7 @@ function launchProjectiles(gs, firerId, angle, power, weaponKey) {
   const fire1 = (ang, spd, wOpts = {}) => {
     const vx = Math.cos(ang) * spd, vy = Math.sin(ang) * spd;
     return simulateTraj(ship.x, ship.y, vx, vy, gs.planets, gs.ships, firerId,
-      { ...wOpts, tunnel: !!w.tunnel });
+      { ...wOpts, tunnel: !!w.tunnel, firerPlanetId: ship.planetId });
   };
 
   if ((w.count || 1) > 1) {
@@ -374,7 +386,7 @@ function applyDamage(trajs, gs, firerId) {
 function resolveShipCraters(gs) {
   const moved = [];
   for (const ship of gs.ships) {
-    if (!ship.alive || ship.planetId == null) continue;
+    if (!ship.alive || ship.planetId == null || ship.floating) continue;
     const planet = gs.planets.find(p => p.id === ship.planetId);
     if (!planet || !planet.holes.length) continue;
 
@@ -383,6 +395,8 @@ function resolveShipCraters(gs) {
       Math.hypot(h.x - ship.x, h.y - ship.y) <= h.r + SHIP_R
     );
     if (!nearHole) continue;
+
+    const fromX = ship.x, fromY = ship.y;
 
     // Find nearest safe angle by scanning outward from current surface angle
     let bestAngle = null;
@@ -405,12 +419,83 @@ function resolveShipCraters(gs) {
       ship.health = Math.max(0, ship.health - fallDmg);
       if (ship.health === 0) ship.alive = false;
     } else {
-      ship.health = 0; ship.alive = false;
+      // Planet cratered beyond livable — ship floats away
+      ship.floating = true;
+      ship.planetId = null;
+      ship.vx = Math.cos(ship.surfaceAngle ?? 0) * 60;
+      ship.vy = Math.sin(ship.surfaceAngle ?? 0) * 60;
     }
     moved.push({ id: ship.id, health: ship.health, alive: ship.alive,
-      x: ship.x, y: ship.y, surfaceAngle: ship.surfaceAngle, shield: ship.shield });
+      x: ship.x, y: ship.y, surfaceAngle: ship.surfaceAngle, shield: ship.shield,
+      floating: ship.floating ?? false, planetId: ship.planetId,
+      fromX, fromY });
   }
   return moved;
+}
+
+// Run gravity physics for floating ships — called at start of each turn
+function updateFloatingShips(gs) {
+  const floatPaths = [];
+  for (const ship of gs.ships) {
+    if (!ship.alive || !ship.floating) continue;
+    const path = [{ x: ship.x, y: ship.y }];
+    let x = ship.x, y = ship.y;
+    let vx = ship.vx ?? 0, vy = ship.vy ?? 0;
+    let landed = false;
+
+    for (let step = 0; step < 420; step++) {
+      let ax = 0, ay = 0;
+      for (const p of gs.planets) {
+        const dx = p.x - x, dy = p.y - y;
+        const d2 = dx * dx + dy * dy;
+        if (d2 < 4) continue;
+        const d = Math.sqrt(d2);
+        const f = G * p.mass / d2;
+        ax += f * dx / d; ay += f * dy / d;
+      }
+      vx += ax * SIM_DT; vy += ay * SIM_DT;
+      x += vx * SIM_DT; y += vy * SIM_DT;
+      if (step % 2 === 0) path.push({ x: Math.round(x * 4) / 4, y: Math.round(y * 4) / 4 });
+
+      // Planet landing check
+      for (const p of gs.planets) {
+        const d = Math.hypot(p.x - x, p.y - y);
+        if (d <= p.r + SHIP_R + 4) {
+          const impactAngle = Math.atan2(y - p.y, x - p.x);
+          let bestAngle = null;
+          for (let da = 0; da <= Math.PI * 2; da += 0.05) {
+            for (const dir of [1, -1]) {
+              const ta = impactAngle + dir * da;
+              const tx = p.x + Math.cos(ta) * (p.r + SHIP_R + 3);
+              const ty = p.y + Math.sin(ta) * (p.r + SHIP_R + 3);
+              if (!inHole(tx, ty, p.holes)) { bestAngle = ta; break; }
+            }
+            if (bestAngle !== null) break;
+          }
+          if (bestAngle !== null) {
+            ship.floating = false; ship.vx = 0; ship.vy = 0;
+            ship.planetId = p.id;
+            ship.surfaceAngle = bestAngle;
+            ship.x = Math.round(p.x + Math.cos(bestAngle) * (p.r + SHIP_R + 3));
+            ship.y = Math.round(p.y + Math.sin(bestAngle) * (p.r + SHIP_R + 3));
+            path.push({ x: ship.x, y: ship.y });
+            landed = true;
+          }
+          break;
+        }
+      }
+      if (landed) break;
+      if (x < -600 || x > W + 600 || y < -600 || y > H + 600) break;
+    }
+    if (!landed) {
+      ship.x = Math.round(x); ship.y = Math.round(y);
+      ship.vx = vx; ship.vy = vy;
+    }
+    floatPaths.push({ shipId: ship.id, path, landed,
+      x: ship.x, y: ship.y, planetId: ship.planetId,
+      surfaceAngle: ship.surfaceAngle, floating: ship.floating });
+  }
+  return floatPaths;
 }
 
 // ─── AI ───────────────────────────────────────────────────────────────────────
@@ -494,11 +579,15 @@ function nextTurn(room) {
   const currentShip = gs.ships.find(s => s.id === currentId);
   if (currentShip?.alive) currentShip.credits += TURN_INCOME;
 
+  // Simulate floating ships drifting under gravity
+  const floatPaths = updateFloatingShips(gs);
+
   io.to(room.id).emit('turn-start', {
     playerId: currentId,
     playerName: currentPlayer?.name || '?',
     isCpu: !currentPlayer?.isHuman,
     creditUpdates: gs.ships.map(s => ({ id: s.id, credits: s.credits })),
+    floatPaths: floatPaths.length > 0 ? floatPaths : undefined,
   });
 
   if (!currentPlayer?.isHuman) {
@@ -642,6 +731,7 @@ io.on('connection', socket => {
         health: 100, alive: true,
         credits: STARTING_CREDITS,
         shield: false,
+        floating: false, vx: 0, vy: 0,
       });
     }
 
@@ -659,37 +749,63 @@ io.on('connection', socket => {
     doFire(room, socket.id, +angle, +power, weapon);
   });
 
-  socket.on('move', ({ planetId }) => {
+  socket.on('move-fire', ({ angle, power }) => {
     const room = rooms.get(socket.data.roomId);
     if (!room?.started) return;
     const gs = room.gameState;
     if (gs.turnOrder[gs.turnIndex] !== socket.id) return;
     const ship = gs.ships.find(s => s.id === socket.id);
     if (!ship?.alive) return;
-    const planet = gs.planets.find(p => p.id === planetId);
-    if (!planet || planet.id === ship.planetId) return;
 
-    // Find a safe angle on the target planet
-    const rng = makeRng((Date.now() ^ (planetId * 97)) >>> 0);
-    let angle = rng() * Math.PI * 2;
-    for (let i = 0; i < 36; i++) {
-      const a = (i / 36) * Math.PI * 2;
-      const tx = planet.x + Math.cos(a) * (planet.r + SHIP_R + 3);
-      const ty = planet.y + Math.sin(a) * (planet.r + SHIP_R + 3);
-      if (!inHole(tx, ty, planet.holes)) { angle = a; break; }
+    const movePower = Math.max(5, Math.min(100, +power || 55));
+    const moveAngle = +angle;
+    const spd = 200 * (movePower / 100);
+    const vx = Math.cos(moveAngle) * spd, vy = Math.sin(moveAngle) * spd;
+
+    // Simulate trajectory with no ships — move can't collide with others
+    const traj = simulateTraj(ship.x, ship.y, vx, vy, gs.planets, [], ship.id,
+      { firerPlanetId: ship.planetId });
+
+    if (traj.hitType === 'planet' && traj.hitId !== null) {
+      const planet = gs.planets.find(p => p.id === traj.hitId);
+      if (planet) {
+        const impactAngle = Math.atan2(traj.hy - planet.y, traj.hx - planet.x);
+        let bestAngle = impactAngle;
+        for (let da = 0; da <= Math.PI * 2; da += 0.05) {
+          let found = false;
+          for (const dir of [1, -1]) {
+            const ta = impactAngle + dir * da;
+            const tx = planet.x + Math.cos(ta) * (planet.r + SHIP_R + 3);
+            const ty = planet.y + Math.sin(ta) * (planet.r + SHIP_R + 3);
+            if (!inHole(tx, ty, planet.holes)) { bestAngle = ta; found = true; break; }
+          }
+          if (found) break;
+        }
+        ship.planetId = planet.id;
+        ship.surfaceAngle = bestAngle;
+        ship.x = Math.round(planet.x + Math.cos(bestAngle) * (planet.r + SHIP_R + 3));
+        ship.y = Math.round(planet.y + Math.sin(bestAngle) * (planet.r + SHIP_R + 3));
+        ship.floating = false; ship.vx = 0; ship.vy = 0;
+      }
+    } else if (traj.hitType === 'oob' || traj.hitType === 'timeout') {
+      // Ends up floating in space
+      ship.floating = true;
+      ship.planetId = null;
+      ship.x = Math.round(Math.max(-200, Math.min(W + 200, traj.hx)));
+      ship.y = Math.round(Math.max(-200, Math.min(H + 200, traj.hy)));
+      ship.vx = traj.vx; ship.vy = traj.vy;
     }
 
-    ship.planetId = planet.id;
-    ship.surfaceAngle = angle;
-    ship.x = Math.round(planet.x + Math.cos(angle) * (planet.r + SHIP_R + 3));
-    ship.y = Math.round(planet.y + Math.sin(angle) * (planet.r + SHIP_R + 3));
-
     io.to(room.id).emit('move-result', {
+      traj: { pts: traj.pts, hitType: traj.hitType,
+        hx: Math.round(traj.hx), hy: Math.round(traj.hy) },
       shipUpdates: [{ id: ship.id, health: ship.health, alive: ship.alive,
         x: ship.x, y: ship.y, surfaceAngle: ship.surfaceAngle,
-        planetId: ship.planetId, shield: ship.shield }],
+        planetId: ship.planetId, shield: ship.shield,
+        floating: ship.floating }],
     });
-    setTimeout(() => { if (room.started && !checkWin(room)) nextTurn(room); }, 400);
+    const animMs = Math.min(8000, traj.pts.length * (1000 / 60 / 2) + 500);
+    setTimeout(() => { if (room.started && !checkWin(room)) nextTurn(room); }, animMs);
   });
 
   socket.on('defend', () => {

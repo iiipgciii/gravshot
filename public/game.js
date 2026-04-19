@@ -54,8 +54,14 @@ let cam = { x: W / 2, y: H / 2 };
 let camTarget = { x: W / 2, y: H / 2 };
 let zoom = 1.0; // 0.3 (zoomed out) – 2.5 (zoomed in)
 
-// Move mode (click a planet to relocate ship)
+// Move mode (aim + fire to launch ship along physics trajectory)
 let moveMode = false;
+
+// Active move animation: { shipId, pts, idx }
+let activeMoveAnim = null;
+
+// Slide animations: [{ shipId, fromX, fromY, toX, toY, age, maxAge }]
+let activeSlideAnims = [];
 
 // Speech bubble
 let activeQuip = null; // { text, x, y, age, maxAge, color }
@@ -954,6 +960,14 @@ function applyShipUpdates(updates) {
     if (s) {
       s.health = u.health;
       s.alive = u.alive;
+      if (u.floating !== undefined) s.floating = u.floating;
+      if (u.planetId !== undefined) s.planetId = u.planetId;
+      // Slide animation when ship is displaced by crater fall
+      if (u.fromX !== undefined && u.fromY !== undefined && u.x !== undefined &&
+          (Math.abs(u.fromX - u.x) > 2 || Math.abs(u.fromY - u.y) > 2)) {
+        activeSlideAnims.push({ shipId: u.id, fromX: u.fromX, fromY: u.fromY,
+          toX: u.x, toY: u.y, age: 0, maxAge: 22 });
+      }
       if (u.x !== undefined) s.x = u.x;
       if (u.y !== undefined) s.y = u.y;
       if (u.surfaceAngle !== undefined) s.surfaceAngle = u.surfaceAngle;
@@ -1025,21 +1039,53 @@ function drawPlanets() {
 
 function drawShips() {
   if (!gameState) return;
+
+  // Advance slide animations
+  for (const sl of activeSlideAnims) sl.age++;
+  activeSlideAnims = activeSlideAnims.filter(sl => sl.age < sl.maxAge);
+
   for (const s of gameState.ships) {
+    // Determine draw position (slide anim overrides, then move anim)
+    let drawX = s.x, drawY = s.y;
+    const slideAnim = activeSlideAnims.find(sl => sl.shipId === s.id && sl.age < sl.maxAge);
+    if (slideAnim) {
+      const t = slideAnim.age / slideAnim.maxAge;
+      drawX = slideAnim.fromX + (slideAnim.toX - slideAnim.fromX) * t;
+      drawY = slideAnim.fromY + (slideAnim.toY - slideAnim.fromY) * t;
+    }
+    if (activeMoveAnim && activeMoveAnim.shipId === s.id) {
+      const pt = activeMoveAnim.pts[activeMoveAnim.idx];
+      if (pt) { drawX = pt.x; drawY = pt.y; }
+    }
+
     // Ships face outward from their planet surface; aim angle overrides for active player
     const baseFacing = s.surfaceAngle ?? 0;
     const isCurrentTurn = s.id === currentTurnId;
-    const displayFacing = (isCurrentTurn && myTurn) ? aimAngle : baseFacing;
-    drawOneShip(s.x, s.y, displayFacing, s.color, isCurrentTurn, s.alive, s.shield);
+    // Floating ships slowly spin
+    const floatFacing = s.floating ? (ticks * 0.025) : baseFacing;
+    const displayFacing = (isCurrentTurn && myTurn && !moveMode) ? aimAngle : floatFacing;
+    drawOneShip(drawX, drawY, displayFacing, s.color, isCurrentTurn, s.alive, s.shield);
+
+    // Floating ships get a drift-glow indicator
+    if (s.floating && s.alive) {
+      ctx.save();
+      ctx.globalAlpha = 0.3 + 0.2 * Math.sin(ticks * 0.07);
+      ctx.strokeStyle = '#ffcc44';
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([3, 4]);
+      ctx.beginPath(); ctx.arc(drawX, drawY, SHIP_R + 6, 0, Math.PI * 2); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.restore();
+    }
 
     ctx.globalAlpha = s.alive ? 1 : 0.3;
     ctx.fillStyle = s.color;
     ctx.font = 'bold 10px Courier New';
     ctx.textAlign = 'center';
-    ctx.fillText(s.name, s.x, s.y - SHIP_R - 14);
+    ctx.fillText(s.name, drawX, drawY - SHIP_R - 14);
     if (s.alive) {
       const bw = 38, bh = 5;
-      const bx = s.x - bw/2, by = s.y - SHIP_R - 10;
+      const bx = drawX - bw/2, by = drawY - SHIP_R - 10;
       ctx.fillStyle = '#111';
       ctx.fillRect(bx, by, bw, bh);
       const pct = s.health / 100;
@@ -1048,8 +1094,8 @@ function drawShips() {
     } else {
       ctx.strokeStyle = '#ff4444'; ctx.lineWidth = 2;
       ctx.beginPath();
-      ctx.moveTo(s.x-7,s.y-7); ctx.lineTo(s.x+7,s.y+7);
-      ctx.moveTo(s.x+7,s.y-7); ctx.lineTo(s.x-7,s.y+7);
+      ctx.moveTo(drawX-7,drawY-7); ctx.lineTo(drawX+7,drawY+7);
+      ctx.moveTo(drawX+7,drawY-7); ctx.lineTo(drawX-7,drawY+7);
       ctx.stroke();
     }
     ctx.globalAlpha = 1;
@@ -1057,7 +1103,7 @@ function drawShips() {
 }
 
 function drawAim() {
-  if (!myTurn || !gameState || animating) return;
+  if (!myTurn || !gameState || animating || moveMode) return;
   const myShip = gameState.ships.find(s => s.id === myId);
   if (!myShip?.alive) return;
 
@@ -1405,19 +1451,24 @@ function render() {
 }
 
 function drawMovePlanetHighlights() {
-  if (!gameState) return;
+  // Move mode now uses aim+fire trajectory — no planet highlights needed
+  // Draw a ship-silhouette preview along the aim trajectory
+  if (!gameState || !myTurn) return;
   const myShip = gameState.ships.find(s => s.id === myId);
-  for (const p of gameState.planets) {
-    if (p.id === myShip?.planetId) continue;
-    const pulse = p.r + 10 + Math.sin(ticks * 0.08 + p.id) * 5;
-    ctx.beginPath(); ctx.arc(p.x, p.y, pulse, 0, Math.PI * 2);
-    ctx.strokeStyle = '#ffaa00';
-    ctx.lineWidth = 2.5;
-    ctx.globalAlpha = 0.55 + 0.25 * Math.sin(ticks * 0.08 + p.id);
-    ctx.stroke();
-    ctx.globalAlpha = 1;
+  if (!myShip?.alive) return;
+  const prev = previewTraj(myShip.x, myShip.y, aimAngle);
+  if (prev.length > 0) {
+    ctx.save();
+    for (let i = 0; i < prev.length; i++) {
+      const t = i / prev.length;
+      ctx.globalAlpha = (1 - t) * 0.45;
+      ctx.fillStyle = '#ffcc44';
+      ctx.beginPath();
+      ctx.arc(prev[i].x, prev[i].y, 1.8, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
   }
-  ctx.lineWidth = 1;
 }
 
 // ─── Input ────────────────────────────────────────────────────────────────────
@@ -1458,7 +1509,7 @@ canvas.addEventListener('mousedown', e => {
 // Hover aim — canvas only, no drag in progress
 canvas.addEventListener('mousemove', e => {
   if (dragStart) return; // handled by document listener below
-  if (!touchMode && myTurn && !animating && !moveMode) {
+  if (!touchMode && myTurn && !animating) {
     const sc = screenCoordsFromEvent(e.clientX, e.clientY);
     mouseWorldPos = screenToWorld(sc.x, sc.y);
     const me = gameState?.ships.find(s => s.id === myId);
@@ -1506,15 +1557,16 @@ document.addEventListener('mouseup', e => {
   if (!myTurn || animating) return;
   const wpos = screenToWorld(sc.x, sc.y);
 
+  const me = gameState?.ships.find(s => s.id === myId);
+  if (!me) return;
+
   if (moveMode) {
-    const planet = gameState?.planets.find(p => Math.hypot(p.x - wpos.x, p.y - wpos.y) < p.r + 20);
-    const myShip = gameState?.ships.find(s => s.id === myId);
-    if (planet && planet.id !== myShip?.planetId) doMove(planet.id);
+    aimAngle = Math.atan2(wpos.y - me.y, wpos.x - me.x);
+    doMove();
     return;
   }
 
-  const me = gameState?.ships.find(s => s.id === myId);
-  if (me) { aimAngle = Math.atan2(wpos.y - me.y, wpos.x - me.x); fire(); }
+  aimAngle = Math.atan2(wpos.y - me.y, wpos.x - me.x); fire();
 });
 
 // Scroll to zoom
@@ -1577,17 +1629,19 @@ function setMoveMode(on) {
   moveMode = on;
   const btn = document.getElementById('move-btn');
   if (btn) btn.classList.toggle('active-mode', on);
-  document.getElementById('aim-hint').textContent = on
-    ? '📡 Click a planet to relocate your ship'
-    : (myTurn ? `Aim ${Math.round((aimAngle*180/Math.PI+360)%360)}° · click canvas or Space to fire` : '');
+  if (on) {
+    document.getElementById('aim-hint').textContent = '📡 Aim & fire to launch your ship — gravity applies!';
+  } else if (myTurn) {
+    updateAimHint();
+  }
 }
 
-function doMove(planetId) {
-  socket.emit('move', { planetId });
+function doMove() {
+  socket.emit('move-fire', { angle: aimAngle, power });
   myTurn = false;
   setMoveMode(false);
   setFireEnabled(false);
-  document.getElementById('aim-hint').textContent = '🚀 Relocating…';
+  document.getElementById('aim-hint').textContent = '🚀 Ship in flight…';
 }
 
 document.getElementById('move-btn').addEventListener('click', () => {
@@ -1603,7 +1657,7 @@ document.addEventListener('keydown', e => {
     e.preventDefault();
   }
   if (!myTurn || animating) return;
-  if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); if (!moveMode) fire(); }
+  if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); if (moveMode) doMove(); else fire(); }
   if (e.key === 'ArrowLeft')  { mouseWorldPos = null; aimAngle -= 5 * Math.PI / 180; updateAimHint(); }
   if (e.key === 'ArrowRight') { mouseWorldPos = null; aimAngle += 5 * Math.PI / 180; updateAimHint(); }
   if (e.key === 'ArrowUp')   { power = Math.min(100, power + 2); updatePower(); }
@@ -1763,6 +1817,7 @@ function onTurnStart({ playerId, playerName, isCpu }) {
   currentTurnId = playerId;
   myTurn = (playerId === myId);
   animating = false; activeShots = []; activeExplosions = [];
+  activeMoveAnim = null;
 
   // Pan camera to current ship
   const currentShip = gameState?.ships.find(s => s.id === playerId);
@@ -1824,6 +1879,28 @@ socket.on('game-start', ({ planets, ships }) => {
 
 socket.on('turn-start', data => {
   if (data.creditUpdates) applyCredits(data.creditUpdates);
+
+  // Animate any floating ships drifting to their new positions
+  if (data.floatPaths && gameState) {
+    for (const fp of data.floatPaths) {
+      const s = gameState.ships.find(sh => sh.id === fp.shipId);
+      if (!s) continue;
+      // Quick slide animation for short float paths (single turn)
+      if (fp.path && fp.path.length > 1) {
+        const fromPt = fp.path[0];
+        const toPt = fp.path[fp.path.length - 1];
+        activeSlideAnims.push({ shipId: fp.shipId, fromX: fromPt.x, fromY: fromPt.y,
+          toX: toPt.x, toY: toPt.y, age: 0, maxAge: Math.min(30, fp.path.length) });
+      }
+      // Apply final position
+      if (fp.x !== undefined) s.x = fp.x;
+      if (fp.y !== undefined) s.y = fp.y;
+      if (fp.floating !== undefined) s.floating = fp.floating;
+      if (fp.planetId !== undefined) s.planetId = fp.planetId;
+      if (fp.surfaceAngle !== undefined) s.surfaceAngle = fp.surfaceAngle;
+    }
+  }
+
   onTurnStart(data);
 });
 
@@ -1869,12 +1946,37 @@ socket.on('fire-result', payload => {
   animStep();
 });
 
-socket.on('move-result', ({ shipUpdates }) => {
-  if (shipUpdates) applyShipUpdates(shipUpdates);
-  const movedShip = gameState?.ships.find(s => s.id === shipUpdates?.[0]?.id);
-  if (movedShip) {
-    camTarget = { x: movedShip.x, y: movedShip.y };
-    addChatMsg('System', `${movedShip.name} relocated to a new planet`);
+socket.on('move-result', ({ traj, shipUpdates }) => {
+  const shipId = shipUpdates?.[0]?.id;
+  const movedShip = gameState?.ships.find(s => s.id === shipId);
+
+  if (traj && traj.pts && traj.pts.length > 0 && movedShip) {
+    // Animate ship flying along its trajectory before applying final position
+    activeMoveAnim = { shipId, pts: traj.pts, idx: 0 };
+    const tick = () => {
+      if (!activeMoveAnim || activeMoveAnim.shipId !== shipId) return;
+      activeMoveAnim.idx = Math.min(activeMoveAnim.idx + ANIM_SPEED, traj.pts.length - 1);
+      const pt = traj.pts[activeMoveAnim.idx];
+      if (pt) camTarget = { x: pt.x, y: pt.y };
+      if (activeMoveAnim.idx < traj.pts.length - 1) {
+        setTimeout(tick, 1000 / 60);
+      } else {
+        activeMoveAnim = null;
+        if (shipUpdates) applyShipUpdates(shipUpdates);
+        const s = gameState?.ships.find(sh => sh.id === shipId);
+        if (s) camTarget = { x: s.x, y: s.y };
+        const label = traj.hitType === 'planet' ? 'landed on a planet' :
+          traj.hitType === 'ring' ? 'hit a ring' : 'is now adrift in space';
+        if (movedShip) addChatMsg('System', `${movedShip.name} ${label}`);
+      }
+    };
+    tick();
+  } else {
+    if (shipUpdates) applyShipUpdates(shipUpdates);
+    if (movedShip) {
+      camTarget = { x: movedShip.x, y: movedShip.y };
+      addChatMsg('System', `${movedShip.name} relocated`);
+    }
   }
 });
 
